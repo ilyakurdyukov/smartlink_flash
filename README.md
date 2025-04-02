@@ -1,2 +1,51 @@
-# smartlink_flash
-Smartlink firmware dumper for Linux
+## Smartlink firmware dumper for Linux
+
+Filmware dumper for MP3 players with a chip labeled as Jointbees MP3, the player shows a version that starts with `yp3_`. The manufacturer of this chip is "Shenzhen Shenju Technology". YP3 is written as 云P3 in Chinese.
+
+When connected with SD card inserted it shows as `301a:2801 SMTLINK CARDREADER`. The specific key on the device is the boot key, when you turn off and connect while holding that key, it shows as `301a:2800 SMTLINK DEVICE`.
+
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, USE AT YOUR OWN RISK!
+
+### Build
+
+There are two options:
+
+1. Using `libusb` for Linux and Windows (MSYS2):  
+Use `make`, `libusb/libusb-dev` packages must be installed.
+
+* For Windows users - please read how to install a [driver](https://github.com/libusb/libusb/wiki/Windows#driver-installation) for `libusb`.
+
+2. Using the USB serial, **Linux only**:  
+Use `make LIBUSB=0`.
+If you're using this mode, you must initialize the USB serial driver before using the tool (every boot):
+```
+$ sudo modprobe ftdi_sio
+$ echo 301a 2800 | sudo tee /sys/bus/usb-serial/drivers/generic/new_id
+```
+
+* On Linux you must run the tool with `sudo`, unless you are using special udev rules (see below).
+
+### Instructions
+
+To make a dump from bootloader mode, you must first use the `init` command:
+```
+$ sudo ./smtlink_dump  init  flash_id  read_flash 0 2M dump.bin
+```
+
+You can dump when connected as a card reader, but do not use the `init` command (it will hang quickly), and specify the device ID in card reader mode:
+```
+$ sudo ./smtlink_dump --id 301a:2801  flash_id  read_flash 0 2M dump.bin
+```
+
+* Where 2MB is the expected length of flash in bytes (may be more or less).
+
+#### Using the tool without sudo
+
+If you create `/etc/udev/rules.d/80-smtlink.rules` with these lines:
+```
+# Smartlink
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="301a", ATTRS{idProduct}=="2800", MODE="0666", TAG+="uaccess"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="301a", ATTRS{idProduct}=="2801", MODE="0666", TAG+="uaccess"
+```
+...then you can run `smtlink_dump` without root privileges.
+
