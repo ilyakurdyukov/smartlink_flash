@@ -39,6 +39,21 @@ $ sudo ./smtlink_dump --id 301a:2801  flash_id  read_flash 0 2M dump.bin
 
 * Where 2MB is the expected length of flash in bytes (may be more or less).
 
+#### Commands
+
+`serial` - print the serial number of the USB device (`libusb` mode only). The serial number actually indicates the chip version (`20201111000001` means `sl6801`, `20220320000001` means `sl6806`).  
+
+Basic commands supported by the chip's boot ROM:
+
+`inquiry` - print SCSI device information.  
+`init` - use first when using bootloader mode, do not use in card reader mode.  
+`flash_id` - read some 32-bit ID.  
+`reset` - reboot the device (doesn't really work).  
+`read_flash <addr> <size> <output_file>`  
+`check_flash <addr> <size>` - CRC16 of the specified range.  
+`write_mem <addr> <file_offset> <size> <input_file>` - zero size means until the end of the file.  
+`exec <addr>` - execute code at the specified address.  
+
 #### Using the tool without sudo
 
 If you create `/etc/udev/rules.d/80-smtlink.rules` with these lines:
