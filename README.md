@@ -38,6 +38,7 @@ $ sudo ./smtlink_dump --id 301a:2801  flash_id  read_flash 0 2M dump.bin
 ```
 
 * Where 2MB is the expected length of flash in bytes (may be more or less).
+* An example payload is [here](payload) (you can read the chip's ROM with it).
 
 #### Commands
 
@@ -53,6 +54,13 @@ Basic commands supported by the chip's boot ROM:
 `check_flash <addr> <size>` - CRC16 of the specified range.  
 `write_mem <addr> <file_offset> <size> <input_file>` - zero size means until the end of the file.  
 `exec <addr>` - execute code at the specified address.  
+`simple_exec <addr> <file>` - equivalent to `write_mem <addr> 0 0 <file> exec <addr+1>`.  
+
+The commands below require loading the payload binary that comes with the tool (using the command `simple_exec 0x820000 payload.bin`).
+
+* Don't load the payload in card reader mode, the result will be unpredictable (most likely the device will hang).
+
+`read_mem <addr> <size> <output_file>`  
 
 #### Using the tool without sudo
 

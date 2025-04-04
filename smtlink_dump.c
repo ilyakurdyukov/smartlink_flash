@@ -354,6 +354,35 @@ static uint8_t* loadfile(const char *fn, size_t *num) {
 
 #define CMD_INQUIRY 0x12
 
+enum {
+	CMD_SL_READID = 0,
+	CMD_SL_WRITEPAGE = 2,
+	CMD_SL_ERASE4K = 3,
+	CMD_SL_ERASE32K = 4,
+	CMD_SL_ERASE64K = 5,
+	CMD_SL_ERASECHIP = 6,
+	CMD_SL_READ = 7,
+	CMD_SL_FASTREAD = 8,
+	CMD_SL_WRITERAM = 9,
+	CMD_SL_RUNRAM = 10,
+
+	CMD_SL_INIT = 0x81,
+	CMD_SL_CRC = 0x82,
+	CMD_SL_RESET = 0x83,
+
+	// 6801_intel_flash.bin -> 0x830000, exec 0x830103
+	CMD_USER_WRITEPAGE = 27,
+	CMD_USER_ERASE4K = 28,
+	CMD_USER_ERASE64K = 29,
+
+	// cal_frequent_drift.bin + 0x400 -> 0x850000, exec 0x850051
+	CMD_USER_RFCHECK_RESULT = 30,
+	CMD_USER_RFCHECK_START = 31,
+
+	// payload/payload.bin -> 0x820000, exec 0x820001
+	CMD_USER_READMEM = 64
+};
+
 typedef struct {
 	uint32_t sig;
 	uint32_t tag;
@@ -410,7 +439,7 @@ static void write_mem_buf(usbio_t *io,
 	for (i = 0; i < size; i += n) {
 		n = size - i;
 		if (n > step) n = step;
-		smtlink_cmd(io, 9, n, addr + i, 0, n);
+		smtlink_cmd(io, CMD_SL_WRITERAM, n, addr + i, 0, n);
 		usb_send(io, mem + i, n);
 		if (check_usbs(io, NULL))
 			ERR_EXIT("write_mem failed\n");
@@ -445,17 +474,43 @@ static unsigned dump_flash(usbio_t *io,
 	for (i = 0; i < size; i += n) {
 		n = size - i;
 		if (n > step) n = step;
-		smtlink_cmd(io, 7, n, addr + i, 1, n);
+		smtlink_cmd(io, CMD_SL_READ, n, addr + i, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) {
 			ERR_EXIT("unexpected length\n");
 			break;
 		}
 		if (check_usbs(io, io->buf + n)) break;
-		if (fwrite(io->buf, 1, n, fo) != n) 
+		if (fwrite(io->buf, 1, n, fo) != n)
 			ERR_EXIT("fwrite failed\n");
 	}
 	DBG_LOG("dump_flash: 0x%08x, target: 0x%x, read: 0x%x\n", addr, size, i);
+	fclose(fo);
+	return i;
+}
+
+static unsigned dump_mem(usbio_t *io,
+		uint32_t addr, uint32_t size, const char *fn, unsigned step) {
+	unsigned i, n, n2;
+	FILE *fo = fopen(fn, "wb");
+	if (!fo) ERR_EXIT("fopen(wb) failed\n");
+
+	if (step > 64) step = 64;
+
+	for (i = 0; i < size; i += n) {
+		n = size - i;
+		if (n > step) n = step;
+		smtlink_cmd(io, CMD_USER_READMEM, n, addr + i, 1, n);
+		n2 = n + USBS_LEN;
+		if (usb_recv(io, n2) != (int)n2) {
+			ERR_EXIT("unexpected length\n");
+			break;
+		}
+		if (check_usbs(io, io->buf + n)) break;
+		if (fwrite(io->buf, 1, n, fo) != n)
+			ERR_EXIT("fwrite failed\n");
+	}
+	DBG_LOG("dump_mem: 0x%08x, target: 0x%x, read: 0x%x\n", addr, size, i);
 	fclose(fo);
 	return i;
 }
@@ -576,7 +631,7 @@ int main(int argc, char **argv) {
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "init")) {
-			smtlink_cmd(io, 0x81, 2, 0, 0, 0);
+			smtlink_cmd(io, CMD_SL_INIT, 2, 0, 0, 0);
 			if (check_usbs(io, NULL)) break;
 			argc -= 1; argv += 1;
 
@@ -605,7 +660,7 @@ int main(int argc, char **argv) {
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "flash_id")) {
-			smtlink_cmd(io, 0, 4, 0, 1, 4);
+			smtlink_cmd(io, CMD_SL_READID, 4, 0, 1, 4);
 			if (usb_recv(io, 4) != 4) {
 				DBG_LOG("unexpected response\n");
 				break;
@@ -615,7 +670,7 @@ int main(int argc, char **argv) {
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "reset")) {
-			smtlink_cmd(io, 0x83, 0, 0, 0, 0);
+			smtlink_cmd(io, CMD_SL_RESET, 0, 0, 0, 0);
 			if (check_usbs(io, NULL)) break;
 			argc -= 1; argv += 1;
 
@@ -638,9 +693,21 @@ int main(int argc, char **argv) {
 
 			addr = str_to_size(argv[2]);
 			if (addr >> 32) ERR_EXIT("32-bit limit reached\n");
-			smtlink_cmd(io, 10, 0, addr, 0, 0);
+			smtlink_cmd(io, CMD_SL_RUNRAM, 0, addr, 0, 0);
 			if (check_usbs(io, NULL)) break;
 			argc -= 2; argv += 2;
+
+		} else if (!strcmp(argv[1], "simple_exec")) {
+			const char *fn; uint64_t addr, offset, size;
+			if (argc <= 5) ERR_EXIT("bad command\n");
+
+			addr = str_to_size(argv[2]);
+			fn = argv[3];
+			if (addr >> 32) ERR_EXIT("32-bit limit reached\n");
+			write_mem(io, addr, 0, 0, fn, blk_size);
+			smtlink_cmd(io, CMD_SL_RUNRAM, 0, addr + 1, 0, 0);
+			if (check_usbs(io, NULL)) break;
+			argc -= 3; argv += 3;
 
 		} else if (!strcmp(argv[1], "read_flash")) {
 			const char *fn; uint64_t addr, size;
@@ -663,7 +730,7 @@ int main(int argc, char **argv) {
 			if ((addr | size | (addr + size)) >> 32)
 				ERR_EXIT("32-bit limit reached\n");
 
-			smtlink_cmd(io, 0x82, size, addr, 1, 2);
+			smtlink_cmd(io, CMD_SL_CRC, size, addr, 1, 2);
 			if (usb_recv(io, 2) != 2) {
 				DBG_LOG("unexpected response\n");
 				break;
@@ -671,6 +738,19 @@ int main(int argc, char **argv) {
 			DBG_LOG("flash_crc: 0x%04x\n", READ16_LE(io->buf));
 			if (check_usbs(io, NULL)) break;
 			argc -= 3; argv += 3;
+
+		// the commands below are implemented only in the custom payload
+		} else if (!strcmp(argv[1], "read_mem")) {
+			const char *fn; uint64_t addr, size;
+			if (argc <= 4) ERR_EXIT("bad command\n");
+
+			addr = str_to_size(argv[2]);
+			size = str_to_size(argv[3]);
+			if ((addr | size | (addr + size)) >> 32)
+				ERR_EXIT("32-bit limit reached\n");
+			fn = argv[4];
+			dump_mem(io, addr, size, fn, blk_size);
+			argc -= 4; argv += 4;
 
 		} else if (!strcmp(argv[1], "blk_size")) {
 			if (argc <= 2) ERR_EXIT("bad command\n");
