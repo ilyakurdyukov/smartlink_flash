@@ -36,6 +36,10 @@ static int crc16(const uint8_t *s, unsigned n) {
 #define ERR_EXIT(...) \
 	do { fprintf(stderr, __VA_ARGS__); return 1; } while (0)
 
+#define READ16_LE(p) ( \
+	((uint8_t*)(p))[1] << 8 | \
+	((uint8_t*)(p))[0])
+
 #define READ32_LE(p) ( \
 	((uint8_t*)(p))[3] << 24 | \
 	((uint8_t*)(p))[2] << 16 | \
@@ -94,7 +98,7 @@ static int dump2fw(uint8_t *mem, unsigned size, const char *fn) {
 		uint8_t buf[0x100];
 		memset(buf, 0, 0x100);
 		memcpy(buf, "CONFIG", 6);
-		WRITE16_LE(buf + 6, 0x100);
+		WRITE32_LE(buf + 6, 0x100);
 		WRITE32_LE(buf + 0x10, fw_size);
 		WRITE16_LE(buf + 0x14, crc16(mem, fw_size));
 		memcpy(buf + 0x16, "SL6801", 6);
@@ -104,6 +108,114 @@ static int dump2fw(uint8_t *mem, unsigned size, const char *fn) {
 	}
 	fwrite(mem, 1, fw_size, fo);
 	fclose(fo);
+	return 0;
+}
+
+static void id2str(char *buf, uint8_t *s) {
+	int i;
+	for (i = 0; i < 4; i++) {
+		unsigned a = s[i];
+		if (a - 0x20 < 0x5f) *buf++ = a;
+		else sprintf(buf, "\\x%02x", a), buf += 4;
+	}
+	*buf = 0;
+}
+
+static int scan_firm(uint8_t *mem0, uint8_t *mem, unsigned size, int flags) {
+	uint32_t off, moff = mem - mem0;
+	if (size < 0x30)
+		ERR_EXIT("too short FIRM partition\n");
+	off = READ32_LE(mem);
+	printf("0x%x: FIRM, timestamp = %u\n",
+			moff, READ32_LE(mem + 4));
+	return 0;
+}
+
+static int scan_fw(uint8_t *mem, unsigned size, int flags) {
+	uint32_t moff = 0;
+	uint8_t *mem0 = mem;
+	int chip = 0;
+
+	if (size >= 0x100 && !memcmp(mem, "CONFIG", 6)) {
+		moff = READ32_LE(mem + 6);
+		if (moff != 0x100)
+			ERR_EXIT("unexpected CONFIG size\n");
+		if (size < moff)
+			ERR_EXIT("data outside the file\n");
+		do {
+			chip = 6801;
+			if (!memcmp(mem + 0x16, "SL6801", 6)) break;
+			chip = 6806;
+			if (!memcmp(mem + 0x16, "SL6806", 6)) break;
+			ERR_EXIT("unknown chip\n");
+		} while(0);
+		size -= moff;
+		{
+			uint32_t len = READ32_LE(mem + 0x10);
+			int chk1, chk2;
+			if (size < len)
+				ERR_EXIT("data outside the file\n");
+			size = len;
+			chk1 = crc16(mem + moff, len);
+			chk2 = READ16_LE(mem + 0x14);
+			if (chk1 != chk2)
+				printf("CONFIG checksum mismatch (0x%04x, expected 0x%04x)\n", chk1, chk2);
+		}
+		mem += moff;
+	}
+
+	if (size < 0x60 || memcmp(mem, "HLKJ", 4))
+		ERR_EXIT("bad bootloader header\n");
+	printf("0x%x: HLKJ, base = 0x%x, entry = 0x%x",
+			(int)(mem - mem0), READ32_LE(mem + 4), READ32_LE(mem + 8));
+	{
+		uint32_t len, off = READ32_LE(mem + 12);
+		len = READ32_LE(mem + 0x10);
+		printf(", off = 0x%x, size = 0x%x\n", off + moff, len);
+		if (size < off || size - off < len)
+			printf("data outside the file\n");
+		else {
+			int chk1, chk2;
+			chk1 = crc16(mem + off, len);
+			chk2 = READ32_LE(mem + 0x14);
+			if (chk1 != chk2)
+				printf("bootloader checksum mismatch (0x%04x, expected 0x%04x)\n", chk1, chk2);
+		}
+	}
+
+	{
+		uint32_t i, n, len, off = READ32_LE(mem + 0x20);
+		uint8_t *p = mem + off;
+		if (size < off || size - off < 0x100)
+			ERR_EXIT("data outside the file\n");
+		n = READ32_LE(p);
+		printf("0x%x: partition table (items = %u)\n", (int)(p - mem0), n);
+		if (n > 15) ERR_EXIT("too many partitions\n");
+		for (i = 0; i < n; i++) {
+			char name[4 * 4 + 1];
+			int psmp;
+			p += 16;
+			id2str(name, p);
+			off = READ32_LE(p + 4);
+			len = READ32_LE(p + 8);
+			printf("partition \"%s\", off = 0x%x, size = 0x%x\n", name, off + moff, len);
+
+			psmp = !memcmp(p, "PSMP", 4);
+			if (size < off || size - off < len) {
+				if (!psmp) printf("data outside the file\n");
+				continue;
+			}
+			if (!psmp) {
+				int chk1, chk2;
+				chk1 = crc16(mem + off, len);
+				chk2 = READ16_LE(p + (chip == 6806 ? 14 : 12));
+				if (chk1 != chk2)
+					printf("partition checksum mismatch (0x%04x, expected 0x%04x)\n", chk1, chk2);
+			}
+			if (!memcmp(p, "FIRM", 4))
+				scan_firm(mem0, mem + off, len, flags);
+		}
+	}
 	return 0;
 }
 
@@ -134,6 +246,9 @@ int main(int argc, char **argv) {
 			fn = argv[2];
 			dump2fw(mem, size, fn);
 			argc -= 2; argv += 2;
+		} else if (!strcmp(argv[1], "scan")) {
+			scan_fw(mem, size, 0);
+			argc -= 1; argv += 1;
 		} else {
 			ERR_EXIT("unknown command\n");
 		}

@@ -4,7 +4,10 @@ For SL6801 firmware dumps.
 
 ### Usage
 
-Converts firmware dump into firmware file:
+Converts a flash dump into a firmware update file:
 
 `./fwhelper flash.bin dump2fw update.up`  
 
+Prints info about a dump or update file.
+
+`./fphelper flash.bin scan`  

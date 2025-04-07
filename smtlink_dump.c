@@ -282,7 +282,6 @@ static int usb_send(usbio_t *io, const void *data, int len) {
 }
 
 static int usb_recv(usbio_t *io, int plen) {
-	uint8_t *buf = io->buf;
 	int a, pos, len, nread = 0;
 	if (plen > TEMP_BUF_LEN)
 		ERR_EXIT("target length too long\n");
@@ -489,7 +488,7 @@ static unsigned dump_flash(usbio_t *io,
 	return i;
 }
 
-static unsigned dump_mem(usbio_t *io,
+static unsigned dump_mem2(usbio_t *io,
 		uint32_t addr, uint32_t size, const char *fn, unsigned step) {
 	unsigned i, n, n2;
 	FILE *fo = fopen(fn, "wb");
@@ -501,6 +500,49 @@ static unsigned dump_mem(usbio_t *io,
 		n = size - i;
 		if (n > step) n = step;
 		smtlink_cmd(io, CMD_USER_READMEM, n, addr + i, 1, n);
+		n2 = n + USBS_LEN;
+		if (usb_recv(io, n2) != (int)n2) {
+			ERR_EXIT("unexpected length\n");
+			break;
+		}
+		if (check_usbs(io, io->buf + n)) break;
+		if (fwrite(io->buf, 1, n, fo) != n)
+			ERR_EXIT("fwrite failed\n");
+	}
+	DBG_LOG("dump_mem: 0x%08x, target: 0x%x, read: 0x%x\n", addr, size, i);
+	fclose(fo);
+	return i;
+}
+
+static unsigned dump_mem(usbio_t *io,
+		uint32_t addr, uint32_t size, const char *fn, unsigned step) {
+	unsigned i, n, n2;
+	uint32_t buf_addr = 0x800de8 + 8 + 64;
+	static const uint16_t code[] = {
+		/* r4 = 0x800de8 */
+		0xf8d4, 0x2210, /* ldr r2, [r4, #0x210] // data_len */
+		0xf8d4, 0x1219, /* ldr r1, [r4, #0x219] // cdb + 2 */
+		0x80e2,         /* strh r2, [r4, #6] */
+		0xf640, 0x332b,	/* mov r3, #0xb2a + 1 // memcpy */
+		0xf104, 0x0008, /* add r0, r4, #8 */
+		0x4718,         /* bx r3 */
+	};
+
+	FILE *fo = fopen(fn, "wb");
+	if (!fo) ERR_EXIT("fopen(wb) failed\n");
+
+	if (step > 64) step = 64;
+
+	for (i = 0; i < size; i += n) {
+		n = size - i;
+		if (n > step) n = step;
+
+		if (!i) {
+			smtlink_cmd(io, CMD_SL_WRITERAM, sizeof(code), buf_addr, 0, sizeof(code));
+			usb_send(io, code, sizeof(code));
+			if (check_usbs(io, NULL)) break;
+		}
+		smtlink_cmd(io, CMD_SL_RUNRAM, addr + i, buf_addr + 1, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) {
 			ERR_EXIT("unexpected length\n");
@@ -545,7 +587,6 @@ int main(int argc, char **argv) {
 	int wait = 300 * REOPEN_FREQ;
 	const char *tty = "/dev/ttyUSB0";
 	int verbose = 0;
-	uint32_t info[4] = { -1, -1, -1, -1 };
 	// cartreader = 301a:2801, bootloader = 301a:2800
 	int id_vendor = 0x301a, id_product = 0x2800;
 	int blk_size = 1024;
@@ -688,7 +729,7 @@ int main(int argc, char **argv) {
 			argc -= 5; argv += 5;
 
 		} else if (!strcmp(argv[1], "exec")) {
-			const char *fn; uint64_t addr, offset, size;
+			uint64_t addr;
 			if (argc <= 2) ERR_EXIT("bad command\n");
 
 			addr = str_to_size(argv[2]);
@@ -697,9 +738,31 @@ int main(int argc, char **argv) {
 			if (check_usbs(io, NULL)) break;
 			argc -= 2; argv += 2;
 
+		} else if (!strcmp(argv[1], "exec_ret")) {
+			uint64_t addr; int len;
+			if (argc <= 2) ERR_EXIT("bad command\n");
+
+			addr = str_to_size(argv[2]);
+			len = strtol(argv[3], NULL, 0);
+			if (addr >> 32) ERR_EXIT("32-bit limit reached\n");
+			smtlink_cmd(io, CMD_SL_RUNRAM, 0, addr, 1, len);
+
+			if (len) {
+				if (usb_recv(io, len) != len) {
+					DBG_LOG("unexpected response\n");
+					break;
+				}
+				if (verbose < 2) {
+					DBG_LOG("result (%d):\n", len);
+					print_mem(stderr, io->buf, len);
+				}
+			}
+			if (check_usbs(io, NULL)) break;
+			argc -= 3; argv += 3;
+
 		} else if (!strcmp(argv[1], "simple_exec")) {
-			const char *fn; uint64_t addr, offset, size;
-			if (argc <= 5) ERR_EXIT("bad command\n");
+			const char *fn; uint64_t addr;
+			if (argc <= 3) ERR_EXIT("bad command\n");
 
 			addr = str_to_size(argv[2]);
 			fn = argv[3];
@@ -722,7 +785,7 @@ int main(int argc, char **argv) {
 			argc -= 4; argv += 4;
 
 		} else if (!strcmp(argv[1], "check_flash")) {
-			const char *fn; uint64_t addr, size;
+			uint64_t addr, size;
 			if (argc <= 3) ERR_EXIT("bad command\n");
 
 			addr = str_to_size(argv[2]);
@@ -739,7 +802,29 @@ int main(int argc, char **argv) {
 			if (check_usbs(io, NULL)) break;
 			argc -= 3; argv += 3;
 
-		// the commands below are implemented only in the custom payload
+		} else if (!strcmp(argv[1], "cmd_ret")) {
+			uint32_t arg1, arg2; int cmd, len;
+			if (argc <= 2) ERR_EXIT("bad command\n");
+
+			cmd = strtol(argv[2], NULL, 0);
+			arg1 = str_to_size(argv[3]);
+			arg2 = str_to_size(argv[4]);
+			len = strtol(argv[5], NULL, 0);
+			smtlink_cmd(io, cmd, arg1, arg2, len != 0, len);
+
+			if (len) {
+				if (usb_recv(io, len) != len) {
+					DBG_LOG("unexpected response\n");
+					break;
+				}
+				if (verbose < 2) {
+					DBG_LOG("result (%d):\n", len);
+					print_mem(stderr, io->buf, len);
+				}
+			}
+			if (check_usbs(io, NULL)) break;
+			argc -= 5; argv += 5;
+
 		} else if (!strcmp(argv[1], "read_mem")) {
 			const char *fn; uint64_t addr, size;
 			if (argc <= 4) ERR_EXIT("bad command\n");
@@ -750,6 +835,19 @@ int main(int argc, char **argv) {
 				ERR_EXIT("32-bit limit reached\n");
 			fn = argv[4];
 			dump_mem(io, addr, size, fn, blk_size);
+			argc -= 4; argv += 4;
+
+		// the commands below are implemented only in the custom payload
+		} else if (!strcmp(argv[1], "read_mem2")) {
+			const char *fn; uint64_t addr, size;
+			if (argc <= 4) ERR_EXIT("bad command\n");
+
+			addr = str_to_size(argv[2]);
+			size = str_to_size(argv[3]);
+			if ((addr | size | (addr + size)) >> 32)
+				ERR_EXIT("32-bit limit reached\n");
+			fn = argv[4];
+			dump_mem2(io, addr, size, fn, blk_size);
 			argc -= 4; argv += 4;
 
 		} else if (!strcmp(argv[1], "blk_size")) {

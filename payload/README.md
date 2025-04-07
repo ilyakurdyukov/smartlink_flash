@@ -8,7 +8,7 @@ An example of how to read the ROM:
 ```
 sudo ./smtlink_dump init \
 	simple_exec 0x820000 payload/payload.bin \
-	read_mem 0 0x5c000 dump.bin
+	read_mem2 0 0x5c000 dump.bin
 ```
 
 ### Build

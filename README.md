@@ -54,13 +54,16 @@ Basic commands supported by the chip's boot ROM:
 `check_flash <addr> <size>` - CRC16 of the specified range.  
 `write_mem <addr> <file_offset> <size> <input_file>` - zero size means until the end of the file.  
 `exec <addr>` - execute code at the specified address.  
+`exec_ret <addr> <ret_size>` - execute the code and read the result.  
 `simple_exec <addr> <file>` - equivalent to `write_mem <addr> 0 0 <file> exec <addr+1>`.  
+`cmd_ret <cmd> <len_arg> <addr_arg> <ret_size>` - run the specified command and read the result.  
+`read_mem <addr> <size> <output_file>` - read memory, can work in card reader mode (uses tiny payload, only tested on SL6801).  
 
 The commands below require loading the payload binary that comes with the tool (using the command `simple_exec 0x820000 payload.bin`).
 
 * Don't load the payload in card reader mode, the result will be unpredictable (most likely the device will hang).
 
-`read_mem <addr> <size> <output_file>`  
+`read_mem2 <addr> <size> <output_file>`  
 
 #### Using the tool without sudo
 
