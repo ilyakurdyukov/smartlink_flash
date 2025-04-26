@@ -1,6 +1,6 @@
 ## Smartlink firmware dumper for Linux
 
-Filmware dumper for MP3 players with a chip labeled as Jointbees MP3, the player shows a version that starts with `yp3_`. The manufacturer of this chip is "Shenzhen Shenju Technology". YP3 is written as 云P3 in Chinese.
+Firmware dumper for MP3 players with a chip labeled as Jointbees MP3, the player shows a version that starts with `yp3_`. The manufacturer of this chip is "Shenzhen Shenju Technology". YP3 is written as 云P3 in Chinese.
 
 When connected with SD card inserted it shows as `301a:2801 SMTLINK CARDREADER`. The specific key on the device is the boot key, when you turn off and connect while holding that key, it shows as `301a:2800 SMTLINK DEVICE`.
 
