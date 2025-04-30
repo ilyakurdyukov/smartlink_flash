@@ -14,7 +14,7 @@ typedef struct {
 } usb_userfn_t;
 
 #define DEF_ROM_FN(addr, ret, name, args) \
-	static ret (* const name) args = (void*)(addr + 1);
+	static ret (* const name) args = (ret (*) args)(addr + 1);
 
 DEF_ROM_FN(0x2b0, void, printf, (const char *fmt, ...))
 DEF_ROM_FN(0xa32, char*, strcpy, (char *dst, const char *src))

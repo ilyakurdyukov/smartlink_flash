@@ -18,7 +18,8 @@ else
 CFLAGS = -Os
 endif
 
-CFLAGS += -Wall -fPIE -ffreestanding -march=armv7-m -mthumb $(EXTRA_CFLAGS) -fno-strict-aliasing
+CFLAGS += -Wall -Wextra -std=c99 -pedantic
+CFLAGS += -fPIE -ffreestanding -march=armv7-m -mthumb $(EXTRA_CFLAGS) -fno-strict-aliasing
 LFLAGS = -nostartfiles -nodefaultlibs -nostdlib -Wl,-T,$(LDSCRIPT) -Wl,-z,notext
 
 # Clang's LTO doesn't work with the GCC toolchain
