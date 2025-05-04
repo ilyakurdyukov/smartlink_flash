@@ -1,6 +1,6 @@
 ## Smartlink firmware helper
 
-For SL6801 firmware dumps.
+For SL6801/SL6806 firmware dumps.
 
 ### Usage
 

@@ -3,6 +3,27 @@
 #include <string.h>
 #include <stdint.h>
 
+static void print_string(FILE *f, uint8_t *buf, size_t n) {
+	size_t i; int a, b = 0;
+	fprintf(f, "\"");
+	for (i = 0; i < n; i++) {
+		a = buf[i]; b = 0;
+		switch (a) {
+		case '"': case '\\': b = a; break;
+		case 0: b = '0'; break;
+		case '\b': b = 'b'; break;
+		case '\t': b = 't'; break;
+		case '\n': b = 'n'; break;
+		case '\f': b = 'f'; break;
+		case '\r': b = 'r'; break;
+		}
+		if (b) fprintf(f, "\\%c", b);
+		else if (a >= 32 && a < 127) fprintf(f, "%c", a);
+		else fprintf(f, "\\x%02x", a);
+	}
+	fprintf(f, "\"\n");
+}
+
 static uint8_t* loadfile(const char *fn, size_t *num) {
 	size_t n, j = 0; uint8_t *buf = 0;
 	FILE *fi = fopen(fn, "rb");
@@ -60,20 +81,31 @@ static int crc16(const uint8_t *s, unsigned n) {
 	((uint8_t*)(p))[3] = (uint8_t)(__tmp >> 24); \
 } while (0)
 
+static void id2str(char *buf, uint8_t *s) {
+	int i;
+	for (i = 0; i < 4; i++) {
+		unsigned a = s[i];
+		if (a - 0x20 < 0x5f) *buf++ = a;
+		else sprintf(buf, "\\x%02x", a), buf += 4;
+	}
+	*buf = 0;
+}
+
 static int dump2fw(uint8_t *mem, unsigned size, const char *fn) {
 	FILE *fo;
 	uint32_t fw_size = 0;
+	const char *chip_name = "SL6801";
 
 	if (size < 0x60 || memcmp(mem, "HLKJ", 4))
 		ERR_EXIT("bad bootloader header\n");
 
 	{
-		uint32_t i, n, len, off = READ32_LE(mem + 0x20);
+		uint32_t i, n, len, off = READ32_LE(mem + 0x20), ver;
 		uint8_t *p = mem + off;
 		if (size < off || size - off < 0x100)
 			ERR_EXIT("data outside the file\n");
 
-		n = READ32_LE(p);
+		n = READ32_LE(p); ver = READ32_LE(p + 8);
 		if (n > 15) ERR_EXIT("too many partitions\n");
 		for (i = 0; i < n; i++) {
 			p += 16;
@@ -82,11 +114,21 @@ static int dump2fw(uint8_t *mem, unsigned size, const char *fn) {
 			len = READ32_LE(p + 8);
 			if (size < off || size - off < len)
 				ERR_EXIT("data outside the file\n");
-			if (crc16(mem + off, len) != READ32_LE(p + 12))
-				ERR_EXIT("partition checksum mismatch\n");
+			{
+				int chk1, chk2;
+				chk1 = crc16(mem + off, len);
+				chk2 = READ16_LE(p + (ver >= 0x30 ? 14 : 12));
+				if (chk1 != chk2) {
+					char name[4 * 4 + 1];
+					id2str(name, p);
+					ERR_EXIT("partition \"%s\" checksum mismatch (0x%04x, expected 0x%04x)\n", name, chk1, chk2);
+				}
+			}
 			len += off;
 			if (fw_size < len) fw_size = len;
 		}
+		/* heuristic */
+		if (ver >= 0x30) chip_name = "SL6806";
 	}
 	if (!fw_size)
 		ERR_EXIT("no firmware partitions found\n");
@@ -101,7 +143,7 @@ static int dump2fw(uint8_t *mem, unsigned size, const char *fn) {
 		WRITE32_LE(buf + 6, 0x100);
 		WRITE32_LE(buf + 0x10, fw_size);
 		WRITE16_LE(buf + 0x14, crc16(mem, fw_size));
-		memcpy(buf + 0x16, "SL6801", 6);
+		strcpy((char*)buf + 0x16, chip_name);
 		buf[0xfe] = 0x55;
 		buf[0xff] = 0xaa;
 		fwrite(buf, 1, 0x100, fo);
@@ -109,16 +151,6 @@ static int dump2fw(uint8_t *mem, unsigned size, const char *fn) {
 	fwrite(mem, 1, fw_size, fo);
 	fclose(fo);
 	return 0;
-}
-
-static void id2str(char *buf, uint8_t *s) {
-	int i;
-	for (i = 0; i < 4; i++) {
-		unsigned a = s[i];
-		if (a - 0x20 < 0x5f) *buf++ = a;
-		else sprintf(buf, "\\x%02x", a), buf += 4;
-	}
-	*buf = 0;
 }
 
 static int scan_firm(uint8_t *mem0, uint8_t *mem, unsigned size, int flags) {
@@ -134,7 +166,6 @@ static int scan_firm(uint8_t *mem0, uint8_t *mem, unsigned size, int flags) {
 static int scan_fw(uint8_t *mem, unsigned size, int flags) {
 	uint32_t moff = 0;
 	uint8_t *mem0 = mem;
-	int chip = 0;
 
 	if (size >= 0x100 && !memcmp(mem, "CONFIG", 6)) {
 		moff = READ32_LE(mem + 6);
@@ -142,13 +173,8 @@ static int scan_fw(uint8_t *mem, unsigned size, int flags) {
 			ERR_EXIT("unexpected CONFIG size\n");
 		if (size < moff)
 			ERR_EXIT("data outside the file\n");
-		do {
-			chip = 6801;
-			if (!memcmp(mem + 0x16, "SL6801", 6)) break;
-			chip = 6806;
-			if (!memcmp(mem + 0x16, "SL6806", 6)) break;
-			ERR_EXIT("unknown chip\n");
-		} while(0);
+		printf("0x%x: CONFIG, chip = ", 0);
+		print_string(stdout, mem + 0x16, mem[0x16 + 9] ? 10 : strlen((char*)mem + 0x16));
 		size -= moff;
 		{
 			uint32_t len = READ32_LE(mem + 0x10);
@@ -184,12 +210,12 @@ static int scan_fw(uint8_t *mem, unsigned size, int flags) {
 	}
 
 	{
-		uint32_t i, n, len, off = READ32_LE(mem + 0x20);
+		uint32_t i, n, len, off = READ32_LE(mem + 0x20), ver;
 		uint8_t *p = mem + off;
 		if (size < off || size - off < 0x100)
 			ERR_EXIT("data outside the file\n");
-		n = READ32_LE(p);
-		printf("0x%x: partition table (items = %u)\n", (int)(p - mem0), n);
+		n = READ32_LE(p); ver = READ32_LE(p + 8);
+		printf("0x%x: partition table (items = %u, ver = 0x%x)\n", (int)(p - mem0), n, ver);
 		if (n > 15) ERR_EXIT("too many partitions\n");
 		for (i = 0; i < n; i++) {
 			char name[4 * 4 + 1];
@@ -208,7 +234,7 @@ static int scan_fw(uint8_t *mem, unsigned size, int flags) {
 			if (!psmp) {
 				int chk1, chk2;
 				chk1 = crc16(mem + off, len);
-				chk2 = READ16_LE(p + (chip == 6806 ? 14 : 12));
+				chk2 = READ16_LE(p + (ver >= 0x30 ? 14 : 12));
 				if (chk1 != chk2)
 					printf("partition checksum mismatch (0x%04x, expected 0x%04x)\n", chk1, chk2);
 			}
