@@ -3,6 +3,8 @@ SRCS = start entry
 OBJS = $(SRCS:%=$(OBJDIR)/%.o)
 LDSCRIPT = simple.ld
 NAME = payload
+CHIP = 6801
+BASE = 0x820000
 
 ifdef TOOLCHAIN
 CC = "$(TOOLCHAIN)"-gcc
@@ -21,6 +23,8 @@ endif
 CFLAGS += -Wall -Wextra -std=c99 -pedantic
 CFLAGS += -fPIE -ffreestanding -march=armv7-m -mthumb $(EXTRA_CFLAGS) -fno-strict-aliasing
 LFLAGS = -nostartfiles -nodefaultlibs -nostdlib -Wl,-T,$(LDSCRIPT) -Wl,-z,notext
+CFLAGS += -DCHIP=$(CHIP)
+LFLAGS += -Wl,--defsym,IMAGE_START=$(BASE)
 
 # Clang's LTO doesn't work with the GCC toolchain
 ifeq ($(findstring -gcc-toolchain,$(notdir $(CC))),)

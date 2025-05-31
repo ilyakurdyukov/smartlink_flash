@@ -1,4 +1,8 @@
+#if CHIP == 6801
 #include "sl6801_sys.h"
+#elif CHIP == 6806
+#include "sl6806_sys.h"
+#endif
 
 static int dummy_cb(void) { return 0; }
 

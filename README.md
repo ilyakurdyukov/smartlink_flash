@@ -2,9 +2,27 @@
 
 Firmware dumper for MP3 players with a chip labeled as Jointbees MP3, the player shows a version that starts with `yp3_`. The manufacturer of this chip is "Shenzhen Shenju Technology". YP3 is written as 云P3 in Chinese.
 
-When connected with SD card inserted it shows as `301a:2801 SMTLINK CARDREADER`. The specific key on the device is the boot key, when you turn off and connect while holding that key, it shows as `301a:2800 SMTLINK DEVICE`.
-
 * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, USE AT YOUR OWN RISK!
+
+#### Chip identification
+
+The device has two modes:
+
+1. Card reader mode, when connected to USB with a card inserted.
+2. Bootloader mode, if you turn off the device and hold down the boot key when connecting to USB.
+
+* The boot key can be any key, it varies from device to device. You will have to search by trial and error.
+* If the device does not have a physical power switch, you can exit bootloader mode by long pressing the power key.
+
+##### SL6801
+
+Card reader: id = `301a:2801`, inquiry = `SMTLINK CARDREADER 1.00`, serial = `20201111000001`  
+Bootloader mode: id = `301a:2800`, inquiry = `SMTLINK DEVICE 2.00`, serial = `20201111000001`  
+
+##### SL6806
+
+Card reader: id = `301a:2800`, inquiry = `SSTLINK DDVICE 2.02` (with typos), serial = `20221008000002`  
+Bootloader mode: id = `301a:2800`, inquiry = `SMTLINK DEVICE 2.00`, serial = `20220320000001`  
 
 ### Build
 
@@ -37,12 +55,13 @@ You can dump when connected as a card reader, but do not use the `init` command 
 $ sudo ./smtlink_dump --id 301a:2801  flash_id  read_flash 0 2M dump.bin
 ```
 
-* Where 2MB is the expected length of flash in bytes (may be more or less).
+* Where 2M is the expected length of flash in bytes (may be more or less, SL6806 has 4MB).
 * An example payload is [here](payload) (you can read the chip's ROM with it).
 
 #### Commands
 
-`serial` - print the serial number of the USB device (`libusb` mode only). The serial number actually indicates the chip version (`20201111000001` means `sl6801`, `20220320000001` means `sl6806`).  
+`chip <6801|6806>` - select chip.  
+`serial` - print the serial number of the USB device (`libusb` mode only). The serial number actually indicates the chip version.  
 
 Basic commands supported by the chip's boot ROM:
 
@@ -57,7 +76,7 @@ Basic commands supported by the chip's boot ROM:
 `exec_ret <addr> <ret_size>` - execute the code and read the result.  
 `simple_exec <addr> <file>` - equivalent to `write_mem <addr> 0 0 <file> exec <addr+1>`.  
 `cmd_ret <cmd> <len_arg> <addr_arg> <ret_size>` - run the specified command and read the result.  
-`read_mem <addr> <size> <output_file>` - read memory, can work in card reader mode (uses tiny payload, only tested on SL6801).  
+`read_mem <addr> <size> <output_file>` - read memory (uses tiny payload, can work with SL6801 in card reader mode).  
 
 The commands below require loading the payload binary that comes with the tool (using the command `simple_exec 0x820000 payload.bin`).
 

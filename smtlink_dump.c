@@ -401,6 +401,7 @@ typedef struct {
 
 static int flash_idx = 0;
 static uint32_t scsi_tag = 1;
+static int sl_chip = 0;
 
 static int check_usbs(usbio_t *io, void *ptr) {
 	usbs_cmd_t *usbs = (usbs_cmd_t*)(ptr ? ptr : io->buf);
@@ -412,6 +413,37 @@ static int check_usbs(usbio_t *io, void *ptr) {
 	} while (0);
 	DBG_LOG("unexpected status\n");
 	return 1;
+}
+
+static void read_serial(usbio_t *io) {
+#if USE_LIBUSB
+	uint8_t serial[256];
+	struct libusb_device_descriptor desc;
+	libusb_device *device = libusb_get_device(io->dev_handle);
+	if (!device)
+		ERR_EXIT("libusb_get_device failed\n");
+	if (libusb_get_device_descriptor(device, &desc) < 0)
+		ERR_EXIT("libusb_get_device_descriptor failed\n");
+	if (libusb_get_string_descriptor_ascii(io->dev_handle,
+			desc.iSerialNumber, serial, sizeof(serial)) < 0)
+		ERR_EXIT("libusb_get_string_descriptor_ascii failed\n");
+	DBG_LOG("serial: \"%s\"\n", serial);
+	if (!sl_chip) {
+		if (!strcmp((char*)serial, "20201111000001")) sl_chip = 6801;
+		else if (!strcmp((char*)serial, "20220320000001")) sl_chip = 6806;
+		//else if (!strcmp((char*)serial, "20221008000002")) sl_chip = 6806;
+	}
+#else
+	ERR_EXIT("libusb mode required\n");
+#endif
+}
+
+static void need_chip_id(usbio_t *io) {
+#if USE_LIBUSB
+	if (!sl_chip) read_serial(io);
+#endif
+	if (sl_chip != 6801 && sl_chip != 6806)
+		ERR_EXIT("unknown chip\n");
 }
 
 static void smtlink_cmd(usbio_t *io, int cmd,
@@ -431,9 +463,57 @@ static void smtlink_cmd(usbio_t *io, int cmd,
 	usb_send(io, &usbc, USBC_LEN);
 }
 
+static void write_mem_6806(usbio_t *io,
+		uint32_t addr, unsigned size, uint8_t *mem) {
+	uint32_t i, n, n2;
+	uint8_t buf[0x100];
+	static const uint16_t code[] = {
+		/* r4 = 0x800df8 */
+		0x2200,         /* movs r2, #0 */
+		0x2300,         /* movs r3, #0 */
+		0x80e3,         /* strh r3, [r4, #6] */
+		0xf8d4, 0x001d, /* ldr r0, [r4, #0x1d] // cdb + 2 */
+		0xf640, 0x438f, /* mov r3, #0xc8e + 1 // memcpy */
+		0xa101,         /* adr r1, 1f */
+		0x4718,         /* bx r3 */
+		0xbf00,         /* nop */
+		/* 1: */
+	};
+	unsigned step = sizeof(buf) - sizeof(code);
+
+	memcpy(buf, code, sizeof(code));
+
+	for (i = 0; i < size; i += n) {
+		n = size - i;
+		if (n > step) n = step;
+		memcpy(buf + sizeof(code), mem + i, n);
+		buf[0] = n;
+		n2 = n + sizeof(code);
+		smtlink_cmd(io, CMD_SL_WRITERAM, n2, 0x3fb000, 0, n2);
+		usb_send(io, buf, n2);
+		if (check_usbs(io, NULL))
+			ERR_EXIT("write_mem failed\n");
+		smtlink_cmd(io, CMD_SL_RUNRAM, addr + i, 0x800e81, 0, 0);
+		if (check_usbs(io, NULL))
+			ERR_EXIT("write_mem failed\n");
+	}
+}
+
 static void write_mem_buf(usbio_t *io,
 		uint32_t addr, unsigned size, uint8_t *mem, unsigned step) {
 	uint32_t i, n;
+
+	need_chip_id(io);
+	if (sl_chip == 6806) {
+		if (addr == 0x800e80) addr = 0x3fb000;
+		if (addr != 0x3fb000) {
+			write_mem_6806(io, addr, size, mem);
+			return;
+		}
+		step = 0x100;
+		if (size > step)
+			ERR_EXIT("unsupported operation\n");
+	}
 
 	for (i = 0; i < size; i += n) {
 		n = size - i;
@@ -516,19 +596,38 @@ static unsigned dump_mem2(usbio_t *io,
 
 static unsigned dump_mem(usbio_t *io,
 		uint32_t addr, uint32_t size, const char *fn, unsigned step) {
-	unsigned i, n, n2;
-	uint32_t buf_addr = 0x800de8 + 8 + 64;
-	static const uint16_t code[] = {
+	unsigned i, n, n2; FILE *fo;
+
+	const uint32_t buf_6801 = 0x800de8 + 8 + 64;
+	static const uint16_t code_6801[] = {
 		/* r4 = 0x800de8 */
 		0xf8d4, 0x2210, /* ldr r2, [r4, #0x210] // data_len */
 		0xf8d4, 0x1219, /* ldr r1, [r4, #0x219] // cdb + 2 */
 		0x80e2,         /* strh r2, [r4, #6] */
-		0xf640, 0x332b,	/* mov r3, #0xb2a + 1 // memcpy */
+		0xf640, 0x332b, /* mov r3, #0xb2a + 1 // memcpy */
 		0xf104, 0x0008, /* add r0, r4, #8 */
 		0x4718,         /* bx r3 */
 	};
+	static const uint16_t code_6806[] = {
+		/* r4 = 0x800df8 */
+		0x6962,         /* ldr r2, [r4, #0x14] // data_len */
+		0xf8d4, 0x101d, /* ldr r1, [r4, #0x1d] // cdb + 2 */
+		0x80e2,         /* strh r2, [r4, #6] */
+		0xf640, 0x438f, /* mov r3, #0xc8e + 1 // memcpy */
+		0x68a0,         /* ldr r0, [r4, #8] */
+		0x4718,         /* bx r3 */
+	};
+	static const struct {
+		uint32_t buf, exec, size; const uint16_t *code;
+	} code_tab[] = {
+		{ buf_6801, buf_6801 | 1, sizeof(code_6801), code_6801 },
+		{ 0x3fb000, 0x800e81, sizeof(code_6806), code_6806 },
+	}, *payload;
 
-	FILE *fo = fopen(fn, "wb");
+	need_chip_id(io);
+	payload = &code_tab[sl_chip == 6806];
+
+	fo = fopen(fn, "wb");
 	if (!fo) ERR_EXIT("fopen(wb) failed\n");
 
 	if (step > 64) step = 64;
@@ -538,11 +637,11 @@ static unsigned dump_mem(usbio_t *io,
 		if (n > step) n = step;
 
 		if (!i) {
-			smtlink_cmd(io, CMD_SL_WRITERAM, sizeof(code), buf_addr, 0, sizeof(code));
-			usb_send(io, code, sizeof(code));
+			smtlink_cmd(io, CMD_SL_WRITERAM, payload->size, payload->buf, 0, payload->size);
+			usb_send(io, payload->code, payload->size);
 			if (check_usbs(io, NULL)) break;
 		}
-		smtlink_cmd(io, CMD_SL_RUNRAM, addr + i, buf_addr + 1, 1, n);
+		smtlink_cmd(io, CMD_SL_RUNRAM, addr + i, payload->exec, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) {
 			ERR_EXIT("unexpected length\n");
@@ -654,21 +753,7 @@ int main(int argc, char **argv) {
 			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "serial")) {
-#if USE_LIBUSB
-			uint8_t serial[256];
-			struct libusb_device_descriptor desc;
-			libusb_device *device = libusb_get_device(io->dev_handle);
-			if (!device)
-				ERR_EXIT("libusb_get_device failed\n");
-			if (libusb_get_device_descriptor(device, &desc) < 0)
-				ERR_EXIT("libusb_get_device_descriptor failed\n");
-			if (libusb_get_string_descriptor_ascii(io->dev_handle,
-					desc.iSerialNumber, serial, sizeof(serial)) < 0)
-				ERR_EXIT("libusb_get_string_descriptor_ascii failed\n");
-			DBG_LOG("serial: \"%s\"\n", serial);
-#else
-			ERR_EXIT("libusb more required\n");
-#endif
+			read_serial(io);
 			argc -= 1; argv += 1;
 
 		} else if (!strcmp(argv[1], "init")) {
@@ -849,6 +934,11 @@ int main(int argc, char **argv) {
 			fn = argv[4];
 			dump_mem2(io, addr, size, fn, blk_size);
 			argc -= 4; argv += 4;
+
+		} else if (!strcmp(argv[1], "chip")) {
+			if (argc <= 2) ERR_EXIT("bad command\n");
+			sl_chip = atoi(argv[2]);
+			argc -= 2; argv += 2;
 
 		} else if (!strcmp(argv[1], "blk_size")) {
 			if (argc <= 2) ERR_EXIT("bad command\n");

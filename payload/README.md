@@ -1,6 +1,6 @@
 ## Payload code source
 
-Tested ONLY on SL6801.
+Tested on SL6801/SL6806.
 
 ### Usage
 
@@ -11,7 +11,12 @@ sudo ./smtlink_dump init \
 	read_mem2 0 0x5c000 dump.bin
 ```
 
+* ROM size for SL6806 is 0x7d000.
+
 ### Build
+
+Use `CHIP=6806` to build for SL6806 (default is SL6801).  
+Use `BASE=N` to change the image base (0x820000 by default).  
 
 #### with GCC from the old NDK
 
