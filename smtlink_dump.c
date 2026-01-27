@@ -584,7 +584,7 @@ static void erase_flash(usbio_t *io, uint32_t addr, uint32_t size) {
 #endif
 		if (n > step) n = step;
 		smtlink_cmd(io, cmd, n, addr + i, 0, 0);
-		usleep(20 * 1000); // 20ms
+		usleep(2 * 1000); // 2ms
 		if (check_usbs(io, NULL))
 			ERR_EXIT("erase_flash failed\n");
 	}
