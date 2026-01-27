@@ -556,16 +556,123 @@ static unsigned dump_flash(usbio_t *io,
 		smtlink_cmd(io, CMD_SL_READ, n, addr + i, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) {
-			ERR_EXIT("unexpected length\n");
+			DBG_LOG("unexpected length\n");
 			break;
 		}
 		if (check_usbs(io, io->buf + n)) break;
-		if (fwrite(io->buf, 1, n, fo) != n)
-			ERR_EXIT("fwrite failed\n");
+		if (fwrite(io->buf, 1, n, fo) != n) {
+			DBG_LOG("fwrite failed\n");
+			break;
+		}
 	}
 	DBG_LOG("dump_flash: 0x%08x, target: 0x%x, read: 0x%x\n", addr, size, i);
 	fclose(fo);
 	return i;
+}
+
+static void erase_flash(usbio_t *io, uint32_t addr, uint32_t size) {
+	unsigned i, n;
+
+	for (i = 0; i < size; i += n) {
+		unsigned step = 0x1000, cmd = CMD_SL_ERASE4K;
+		n = size - i;
+#if 0 // not tested
+		if (!((addr + i) & 0x7fff) && n >= 0x8000)
+			step = 0x8000, cmd = CMD_SL_ERASE32K;
+		if (!((addr + i) & 0xffff) && n >= 0x10000)
+			step = 0x10000, cmd = CMD_SL_ERASE64K;
+#endif
+		if (n > step) n = step;
+		smtlink_cmd(io, cmd, n, addr + i, 0, 0);
+		usleep(20 * 1000); // 20ms
+		if (check_usbs(io, NULL))
+			ERR_EXIT("erase_flash failed\n");
+	}
+}
+
+static int sl_crc16(const uint8_t *s, unsigned n) {
+	unsigned t, crc = 0xffff;
+	while (n--) {
+#if 1
+		t = crc >> 8 ^ *s++;
+		t ^= t >> 4;
+		crc = (crc << 8 ^ t ^ t << 5 ^ t << 12) & 0xffff;
+#else
+		crc ^= *s++ << 8;
+		for (t = 0; t < 8; t++) {
+			crc <<= 1;
+			if (crc & 0x10000) crc ^= 0x11021;
+			// crc ^= (0u - (crc >> 16)) & 0x11021;
+		}
+#endif
+	}
+	return crc;
+}
+
+static void write_flash(usbio_t *io,
+		uint32_t addr, unsigned src_offs, unsigned src_size,
+		const char *fn) {
+	uint8_t *mem; size_t size = 0;
+	uint8_t buf[0x1000]; unsigned i; uint32_t blk_addr;
+	mem = loadfile(fn, &size);
+	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
+	if (size >> 32) ERR_EXIT("file too big\n");
+	if (size < src_offs)
+		ERR_EXIT("data outside the file\n");
+	size -= src_offs;
+	if (src_size) {
+		if (size < src_size)
+			ERR_EXIT("data outside the file\n");
+		size = src_size;
+	}
+
+	for (i = 0; i < size; ) {
+		unsigned n = 0x1000, n2, step, j, m1, m2;
+		unsigned crc1, crc2;
+		blk_addr = (addr + i) & ~n;
+		smtlink_cmd(io, CMD_SL_READ, n, blk_addr, 1, n);
+		n2 = n + USBS_LEN;
+		if (usb_recv(io, n2) != (int)n2) break;
+		if (check_usbs(io, io->buf + n)) break;
+		memcpy(buf, io->buf, n);
+
+		n2 = (addr + i) & (n - 1);
+		step = n - n2;
+		n = size - i;
+		if (n > step) n = step;
+
+		for (m1 = m2 = j = 0; j < n; j++) {
+			int old = buf[n2 + j], new = mem[i + j];
+			// doesn't work as expected
+			// m1 |= ~old & new; m2 |= old ^ new;
+			if (old != new) { m2 = 1; if (old != 0xff) m1 = 1; }
+			buf[n2 + j] = new;
+		}
+		i += n;
+		if (!m2) continue; // same data
+
+		n = 0x1000;
+		if (m1) erase_flash(io, blk_addr, n);
+		smtlink_cmd(io, CMD_SL_WRITEPAGE, n, blk_addr, 0, n);
+		usb_send(io, buf, n);
+		usleep(50 * 1000); // 50ms
+		if (check_usbs(io, NULL)) break;
+
+		smtlink_cmd(io, CMD_SL_CRC, n, blk_addr, 1, 2);
+		n2 = 2 + USBS_LEN;
+		if (usb_recv(io, n2) != (int)n2) break;
+		if (check_usbs(io, io->buf + 2)) break;
+
+		crc1 = READ16_LE(io->buf);
+		crc2 = sl_crc16(buf, n);
+		if (crc1 != crc2) {
+			DBG_LOG("wrong checksum (0x%04x, expected 0x%04x)\n", crc1, crc2);
+			break;
+		}
+	}
+	free(mem);
+	if (i < size)
+		ERR_EXIT("write_flash failed at 0x%x\n", blk_addr);
 }
 
 static unsigned dump_mem2(usbio_t *io,
@@ -582,7 +689,7 @@ static unsigned dump_mem2(usbio_t *io,
 		smtlink_cmd(io, CMD_USER_READMEM, n, addr + i, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) {
-			ERR_EXIT("unexpected length\n");
+			DBG_LOG("unexpected length\n");
 			break;
 		}
 		if (check_usbs(io, io->buf + n)) break;
@@ -644,7 +751,7 @@ static unsigned dump_mem(usbio_t *io,
 		smtlink_cmd(io, CMD_SL_RUNRAM, addr + i, payload->exec, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) {
-			ERR_EXIT("unexpected length\n");
+			DBG_LOG("unexpected length\n");
 			break;
 		}
 		if (check_usbs(io, io->buf + n)) break;
@@ -886,6 +993,32 @@ int main(int argc, char **argv) {
 			DBG_LOG("flash_crc: 0x%04x\n", READ16_LE(io->buf));
 			if (check_usbs(io, NULL)) break;
 			argc -= 3; argv += 3;
+
+		} else if (!strcmp(argv[1], "erase_flash")) {
+			uint64_t addr, size;
+			if (argc <= 3) ERR_EXIT("bad command\n");
+
+			addr = str_to_size(argv[2]);
+			size = str_to_size(argv[3]);
+			if ((addr | size) & 0xfff)
+				ERR_EXIT("must be aligned by 0x1000\n");
+			if ((addr | size | (addr + size)) >> 32)
+				ERR_EXIT("32-bit limit reached\n");
+			erase_flash(io, addr, size);
+			argc -= 3; argv += 3;
+
+		} else if (!strcmp(argv[1], "write_flash")) {
+			const char *fn; uint64_t addr, offset, size;
+			if (argc <= 5) ERR_EXIT("bad command\n");
+
+			addr = str_to_size(argv[2]);
+			offset = str_to_size(argv[3]);
+			size = str_to_size(argv[4]);
+			fn = argv[5];
+			if ((addr | size | offset | (addr + size)) >> 32)
+				ERR_EXIT("32-bit limit reached\n");
+			write_flash(io, addr, offset, size, fn);
+			argc -= 5; argv += 5;
 
 		} else if (!strcmp(argv[1], "cmd_ret")) {
 			uint32_t arg1, arg2; int cmd, len;

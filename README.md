@@ -77,6 +77,8 @@ Basic commands supported by the chip's boot ROM:
 `simple_exec <addr> <file>` - equivalent to `write_mem <addr> 0 0 <file> exec <addr+1>`.  
 `cmd_ret <cmd> <len_arg> <addr_arg> <ret_size>` - run the specified command and read the result.  
 `read_mem <addr> <size> <output_file>` - read memory (uses tiny payload, can work with SL6801 in card reader mode).  
+`erase_flash <addr> <size>` - must be aligned to 4KB.  
+`write_flash <addr> <file_offset> <size> <input_file>` - zero size means until the end of the file.  
 
 The commands below require loading the payload binary that comes with the tool (using the command `simple_exec 0x820000 payload.bin`).
 
