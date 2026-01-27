@@ -47,6 +47,7 @@ static void print_mem(FILE *f, const uint8_t *buf, size_t len) {
 	}
 }
 
+__attribute__((unused))
 static void print_string(FILE *f, uint8_t *buf, size_t n) {
 	size_t i; int a, b = 0;
 	fprintf(f, "\"");
@@ -627,7 +628,7 @@ static void write_flash(usbio_t *io,
 	}
 
 	for (i = 0; i < size; ) {
-		unsigned n = 0x1000, n2, step, j, m1, m2, m3;
+		unsigned n = 0x1000, n2, step, j, m1, m2;
 		unsigned crc1, crc2;
 		blk_addr = (addr + i) & ~(n - 1);
 		smtlink_cmd(io, CMD_SL_READ, n, blk_addr, 1, n);
@@ -807,6 +808,7 @@ int main(int argc, char **argv) {
 	int blk_size = 1024;
 
 #if USE_LIBUSB
+	(void)tty;
 	ret = libusb_init(NULL);
 	if (ret < 0)
 		ERR_EXIT("libusb_init failed: %s\n", libusb_error_name(ret));
