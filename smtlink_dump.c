@@ -645,7 +645,7 @@ static void write_flash(usbio_t *io,
 			int old = buf[n2 + j], new = mem[i + j];
 			// doesn't work as expected
 			// m1 |= ~old & new; m2 |= old ^ new;
-			if (old != new) { m2 = 1; if (old != 0xff) m1 = 1; }
+			if (old != new) { m2 = 1; if (old != 0xff && new) m1 = 1; }
 			buf[n2 + j] = new;
 		}
 		i += n;
