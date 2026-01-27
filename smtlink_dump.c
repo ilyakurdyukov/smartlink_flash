@@ -643,9 +643,14 @@ static void write_flash(usbio_t *io,
 
 		for (m1 = m2 = j = 0; j < n; j++) {
 			int old = buf[n2 + j], new = mem[i + j];
-			// doesn't work as expected
-			// m1 |= ~old & new; m2 |= old ^ new;
+			// The result of writing A over B is not equal to "A & B".
+			// Changing 0 to 1 is unpredictable. In about 90% of cases the bit will return to 1.
+			// Changing 1 to 0 without erasing seems to be stable.
+#if 1
+			m1 |= ~old & new; m2 |= old ^ new;
+#else
 			if (old != new) { m2 = 1; if (old != 0xff && new) m1 = 1; }
+#endif
 			buf[n2 + j] = new;
 		}
 		i += n;
