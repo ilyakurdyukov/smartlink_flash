@@ -629,7 +629,7 @@ static void write_flash(usbio_t *io,
 	for (i = 0; i < size; ) {
 		unsigned n = 0x1000, n2, step, j, m1, m2;
 		unsigned crc1, crc2;
-		blk_addr = (addr + i) & ~n;
+		blk_addr = (addr + i) & ~(n - 1);
 		smtlink_cmd(io, CMD_SL_READ, n, blk_addr, 1, n);
 		n2 = n + USBS_LEN;
 		if (usb_recv(io, n2) != (int)n2) break;
