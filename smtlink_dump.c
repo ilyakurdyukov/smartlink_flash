@@ -627,7 +627,7 @@ static void write_flash(usbio_t *io,
 	}
 
 	for (i = 0; i < size; ) {
-		unsigned n = 0x1000, n2, step, j, m1, m2;
+		unsigned n = 0x1000, n2, step, j, m1, m2, m3;
 		unsigned crc1, crc2;
 		blk_addr = (addr + i) & ~(n - 1);
 		smtlink_cmd(io, CMD_SL_READ, n, blk_addr, 1, n);
@@ -658,10 +658,14 @@ static void write_flash(usbio_t *io,
 
 		n = 0x1000;
 		if (m1) erase_flash(io, blk_addr, n);
-		smtlink_cmd(io, CMD_SL_WRITEPAGE, n, blk_addr, 0, n);
-		usb_send(io, buf, n);
-		usleep(50 * 1000); // 50ms
-		if (check_usbs(io, NULL)) break;
+		/* If all bytes are 0xff then no writing is required. */
+		for (j = 0; j < n; j++) if (buf[j] != 0xff) break;
+		if (j != n) {
+			smtlink_cmd(io, CMD_SL_WRITEPAGE, n, blk_addr, 0, n);
+			usb_send(io, buf, n);
+			usleep(50 * 1000); // 50ms
+			if (check_usbs(io, NULL)) break;
+		}
 
 		smtlink_cmd(io, CMD_SL_CRC, n, blk_addr, 1, 2);
 		n2 = 2 + USBS_LEN;
