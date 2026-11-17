@@ -613,7 +613,7 @@ static int sl_crc16(const uint8_t *s, unsigned n) {
 static void write_flash(usbio_t *io,
 		uint32_t addr, unsigned src_offs, unsigned src_size,
 		const char *fn) {
-	uint8_t *mem; size_t size = 0;
+	uint8_t *mem, *src; size_t size = 0;
 	uint8_t buf[0x1000]; unsigned i; uint32_t blk_addr;
 	mem = loadfile(fn, &size);
 	if (!mem) ERR_EXIT("loadfile(\"%s\") failed\n", fn);
@@ -626,6 +626,7 @@ static void write_flash(usbio_t *io,
 			ERR_EXIT("data outside the file\n");
 		size = src_size;
 	}
+	src = mem + src_offs;
 
 	for (i = 0; i < size; ) {
 		unsigned n = 0x1000, n2, step, j, m1, m2;
@@ -643,7 +644,7 @@ static void write_flash(usbio_t *io,
 		if (n > step) n = step;
 
 		for (m1 = m2 = j = 0; j < n; j++) {
-			int old = buf[n2 + j], new = mem[i + j];
+			int old = buf[n2 + j], new = src[i + j];
 			// The result of writing A over B is not equal to "A & B".
 			// Changing 0 to 1 is unpredictable. In about 90% of cases the bit will return to 1.
 			// Changing 1 to 0 without erasing seems to be stable.
